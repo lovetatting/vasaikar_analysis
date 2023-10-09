@@ -1,0 +1,1419 @@
+---
+title: "Vasaikar"
+author: "Love tätting"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  dev = "png",
+  dpi = 600
+)
+
+set.seed(123)
+
+library(tidyverse)
+library(readxl)
+library(kableExtra)
+library(pander)
+library(ggpubr)
+library(magrittr)
+library(scales)
+library(patchwork)
+library(Hmisc)
+library(PALMO)
+library(naniar)
+library(visdat)
+library(UpSetR)
+library(VIM)
+library(impute)
+library(factoextra)
+library(FactoMineR)
+library(M3C)
+library(RColorBrewer)
+library(qpdf)
+library(pheatmap)
+library(mice)
+library(writexl)
+library(gridExtra)
+library(pdftools)
+library(cowplot)
+library(MOFA2)
+
+theme_set(theme_get() + theme(plot.caption = element_text(hjust = 0),
+                              plot.title = element_text(hjust = 0.5)))
+panderOptions('table.alignment.default', 'left')
+
+```
+
+
+```{r read_data}
+
+olink.raw <- read_excel(
+  file.path("data", "Vasaikar_2023_Supp_Data_1.xlsx"), 
+  na = "NA", 
+  sheet = "1c")
+
+data <- list()
+data$raw = sapply(c("1a", "1b", "1c"), \(sheet) {
+  read_excel(
+  file.path("data", "Vasaikar_2023_Supp_Data_1.xlsx"), 
+  na = "NA", 
+  sheet = sheet)
+}, simplify=F, USE.NAMES=T)
+
+## Add description on each data set
+data$desc$`1a` <- 'CBC metadata collected longitudinally (10 weeks)'
+data$desc$`1b` <- 'Flow based cell proportions (%) calculated for longitudinal samples'
+data$desc$`1c` <- 'Protein expression obtained from Olink Platform'
+
+## Add column name to column of protein names in 1c
+data$raw$`1c` <- data$raw$`1c` %>% 
+  rename(PROTID = ...1)
+
+## Individual Metadata
+# Create the dataframe with implicit factor conversion
+patient.metadata <- data.frame(
+  donor = c("PTID1", "PTID2", "PTID3", "PTID4", "PTID5", "PTID6"),
+  sex = c("female", "male", "female", "male", "female", "male"),
+  age_group = c("36-40", "36-40", "21-25", "31-35", "26-30", "36-40")
+)
+
+# Specify the correct order for age_group and convert to ordered factor
+age_levels <- c("21-25", "26-30", "31-35", "36-40")
+patient.metadata$age_group <- factor(patient.metadata$age_group, levels = age_levels, ordered = TRUE)
+
+data$desc$patient.metadata <- patient.metadata
+
+```
+
+```{r tidy_1a}
+## Correct data types
+data$raw$`1a`$Descriptor <- as.factor(data$raw$`1a`$Descriptor)
+data$raw$`1a`$Type <- as.factor(data$raw$`1a`$Type)
+
+data.columns.1a <- c(
+  "PTID1W1", "PTID1W2", "PTID1W3", "PTID1W4", "PTID1W5", "PTID1W6", "PTID1W7", "PTID1W8", "PTID1W9", "PTID1W10",
+  "PTID2W1", "PTID2W2", "PTID2W3", "PTID2W4", "PTID2W5", "PTID2W6", "PTID2W7", "PTID2W8", "PTID2W9", "PTID2W10",
+  "PTID3W1", "PTID3W2", "PTID3W3", "PTID3W4", "PTID3W5", "PTID3W6", "PTID3W7", "PTID3W8", "PTID3W9", "PTID3W10",
+  "PTID4W1", "PTID4W2", "PTID4W3", "PTID4W4", "PTID4W5", "PTID4W6", "PTID4W7", "PTID4W8", "PTID4W9", "PTID4W10",
+  "PTID5W1", "PTID5W2", "PTID5W3", "PTID5W4", "PTID5W5", "PTID5W6", "PTID5W7", "PTID5W8", "PTID5W9", "PTID5W10",
+  "PTID6W1", "PTID6W2", "PTID6W3", "PTID6W4", "PTID6W5", "PTID6W6", "PTID6W7", "PTID6W8", "PTID6W9", "PTID6W10"
+)
+
+
+# Original descriptor values
+original <- c("RBC (10^6/mm^3)", "WBC (10^3/mm^3)", "LYM (10^3/mm^3)", "MON (10^3/mm^3)", 
+              "GRA (10^3/mm^3)", "PLT (10^3/mm^3)", "HGB (g/dl)", "MCV (um^3)", 
+              "RDW (%)", "MPV (um^3)")
+
+# Corresponding Unicode values
+unicode <- c("RBC (10⁶/mm³)", "WBC (10³/mm³)", "LYM (10³/mm³)", "MON (10³/mm³)", 
+             "GRA (10³/mm³)", "PLT (10³/mm³)", "HGB (g/dl)", "MCV (μm³)", 
+             "RDW (%)", "MPV (μm³)")
+
+# Create a named vector for direct mapping
+descriptor_mapping <- setNames(unicode, original)
+
+# Use the mapping to update the column
+data$raw$`1a`$Descriptor_uni <- descriptor_mapping[as.character(data$raw$`1a`$Descriptor)]
+
+# Add GRA/LYM
+
+# Fetch the values of GRA and LYM rows for those columns
+GRA_values <- filter(data$raw$`1a`, Type == "GRA") %>% 
+  select(all_of(data.columns.1a)) %>% slice(1)
+LYM_values <- filter(data$raw$`1a`, Type == "LYM") %>% 
+  select(all_of(data.columns.1a)) %>% slice(1)
+
+# Compute the division for those columns
+division_values <- as.data.frame(GRA_values / LYM_values)
+
+# Prepare the final row to be added
+division_row <- data.frame(Type = "GRA/LYM", 
+                           Descriptor = "GRA divided by LYM", 
+                           Descriptor_uni = "GRA/LYM", division_values)
+
+# Bind the new row to the original data
+data$raw$`1a` <- rbind(data$raw$`1a`, division_row)
+
+
+
+```
+
+
+```{r pivot_longer_1a, include=F}
+
+pivot_longer_on_ptid <- function(data_df) {
+  
+  result <- data_df %>%
+    # Convert to long format
+    pivot_longer(
+      cols = starts_with("PTID"),
+      names_to = "ID_Week",
+      values_to = "Value"
+    ) %>%
+    
+    # Separate ID_Week into ID and Week columns
+    separate(
+      col = ID_Week,
+      into = c("ID", "Week"),
+      sep = "(?=W)"
+    ) %>%
+    
+    # Extract only the numeric parts and convert to factors
+    mutate(
+      ID = as.factor(str_extract(ID, "\\d+")),
+      Week = as.factor(str_remove(Week, "W"))
+    )
+  
+  return(result)
+}
+
+data$raw$long$`1a` <- pivot_longer_on_ptid(data$raw$`1a`)
+patient.palette <- c("#1f77b4", # muted blue
+                     "#ff7f0e", # safety orange
+                     "#2ca02c", # cooked asparagus green
+                     "#d62728", # brick red
+                     "#9467bd", # muted purple
+                     "#8c564b"  # chestnut brown
+                    )
+
+
+```
+
+# Introduction
+
+This report is built on the following paper. 
+
+**Title:** A comprehensive platform for analyzing longitudinal multi-omics data
+
+**Journal:** Nature Communications  
+**Publication Date:** March 27, 2023  
+**Volume:** 14, **Issue:** 1, **Page:** 1684  
+**DOI:** [10.1038/s41467-023-37432-w](https://doi.org/10.1038/s41467-023-37432-w)
+
+**Author:** Suhas V Vasaikar^1^  
+**Data Source:** Supplementary Table 1
+
+## Data Structure
+
+### Complete Blood Count
+
+Complete blood count was measured in all six individuals at week 1-10 (6 individuals x 10 time points). 
+
+### Flow Cytometry
+
+Flow Cytometry was performed in patient 2,4,5 and 6 at weeks 2-7 (4 individuals x 6 time points).
+
+### Olink
+
+Olink was performed on plasma from all six individuals at all weeks (6 individuals x 10 time points)
+
+### Patient Metadata
+
+----------------------------
+donor   sex      age_group  
+------- -------- -----------
+PTID1   female   36-40      
+
+PTID2   male     36-40      
+
+PTID3   female   21-25      
+
+PTID4   male     31-35      
+
+PTID5   female   26-30      
+
+PTID6   male     36-40      
+----------------------------
+
+## Complete Blood Count
+
+```{r analysis_CBC_patient_by_parameter}
+
+
+
+plot.CBC.patient.by.parameter <- ggplot(data = data$raw$long$`1a`, aes(x = as.numeric(as.character(Week)), y = Value, group = ID)) +
+  # Raw data as semi-transparent lines
+  geom_line(aes(color = ID), size = 0.5, alpha = 0.5) +
+
+  scale_color_manual(values = patient.palette) +
+  facet_wrap(~ Descriptor_uni, scales = "free_y") +
+  labs(
+    title = "Complete Blood Counts Over 10 Weeks",
+    x = "Week",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+plot.CBC.patient.by.parameter
+
+
+
+```
+
+
+
+From overviewing the CBC data we can see that
+
+* Granulocytes and WBC varies over time and between individuals. This is expected. 
+* One patients is anemic (#3) and the other are not. However, hemoglobin values tend to be higher in the age groups among healthy individuals. One patient is borderline to hyperglobulinemia (#2), but is probably normal as the patient is a young male. Patient #3 likely has iron deficiency anemia or thalassemia. 
+* MPV is distinctly raised in patient #3. This parameter is not commonly reported in Europe, but an increased MPV is commonly due to an increased production of platelets. This correlates with a state of iron deficiency, which in many cases results in overt thrombocytosis if left untreated. 
+* RDW is conspicuously increased in patient #3. This indicates anisocytosis (different sizes of red blood cells). It can be seen in a range of conditions. In this case, it is likely to reflect ineffective erythropoiesis of iron deficiency. 
+* Lymphocytes are stable over time but with some individual variation. This is expected. None have lymphocytosis, which would be an uncommon feature and invariably pathological. Two aptients have lower lymnphocyte counts, but not lymphopenia. Lymphocytes tend to decrease on inflammation. 
+* PATID 1 and 3 might have some underlying inflammation as indicated by granulocytes, lymphocytes and their ratio (higher GRA/LYM ratio indicates inflammation). However, the inflammation is not great and could eg. reflect obesity. 
+* Precision in the instrument to measure monocytes is rounded to nearest 100. This makes monocytes more of a discrete variable in this dataset. 
+* There are no missing values in the CBC data set.
+
+In an overview of the CBC data, we can easily see that patient 3 is an outlier. The patient is a young female 21-25 years old, and likely to be menstruating. She is anemic, probably symptomatic on exercise but not in rest if optherwise healthy. Since she has a downward slope in hemoglobin (HGB) and mean corpuscular volume (MCV), together with a late increase in platelets (PLT), it is most likely that she has iron deficiency anemia, rather than just thalassemia. 
+
+Patient 3 will not be excluded based on this, but her iron deficiency will have effects on other parameters that might not be readily known and hard to account for. 
+
+Among the other patients, no certain conclusions may be drawn regarding their health. 
+
+### Data Cleaning
+
+There are no obvious errors in data collection (instrument fault) that is not expected form the variance in different health states and what is normal for longitudinal blood samples. Certainly, as the number of subjects is significantly fewer than the time points and measured variables (blood types), it will be hard to conclude on outliers vs normal variation. 
+
+### Outliers
+
+```{r analysis_CBC_parameter_by_patient}
+#| fig.cap = "Values for each CBC parameter and each patient was scaled but not centered
+#| to account for the different value ranges and individual differences. 
+#| It can be seen that over time, CBC parameters are generally stable within a 
+#| healthy individual. One patient ha sanemia, which the scaling masks, but it is a slow 
+#| condition as is not expected to have a noticeable impact on individually scaled data."
+
+CBC.palette <- c("#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072", "#80B1D3", 
+               "#FDB462", "#B3DE69", "#FCCDE5", "#D9D9D9", "#BC80BD", "#CCEBC5")
+
+
+data$raw$long$`1a` %>%
+  select(-Descriptor, -Type) %>% 
+  group_by(Descriptor_uni, ID) %>% 
+  mutate(scaled_value = scale(Value, center = F)) %>% 
+  ggplot(aes(x = as.numeric(as.character(Week)), y = scaled_value, group = Descriptor_uni)) +
+  # Raw data as semi-transparent lines
+  geom_line(aes(color = Descriptor_uni), size = 0.5, alpha = 0.7) +
+
+  scale_color_manual(values = CBC.palette) +
+  facet_wrap(~ ID) +
+  labs(
+    title = "Complete Blood Counts Over 10 Weeks",
+    x = "Week",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+```
+
+```{r create_palmo_1a, include=F}
+
+ann_palmo_1a <- data.frame(Sample = data.columns.1a,
+                     PTID = rep(1:6, each=10),
+                     Time = rep(1:10, 6)
+                     )
+
+
+# get data column
+expr_palmo_a1 <- data$raw$`1a` %>%
+  select(-c(Descriptor_uni, Type, Descriptor)) %>%
+#  select(-matches("PTID3")) %>% #To test removing PTID 3 with anemia
+  as.matrix() %>% 
+  t() %>% #center and scale per blood cell type
+  scale(center = T, scale = T) %>% 
+  t()
+
+rownames(expr_palmo_a1) <- data$raw$`1a`$Descriptor_uni
+
+palmo_obj <- createPALMOobject(anndata=ann_palmo_1a, data=expr_palmo_a1)
+
+palmo_obj<- annotateMetadata(data_object=palmo_obj,
+            sample_column= "Sample", donor_column= "PTID",
+            time_column= "Time")
+
+palmo_obj <- mergePALMOdata(data_object=palmo_obj, datatype = "bulk")
+
+palmo_obj <- checkReplicates(data_object=palmo_obj, mergeReplicates = T)
+
+#sample size is really too small for outlier analysis and should be visually inspected
+outlierDetect(data_object=palmo_obj, z_cutoff=2)
+
+naniar::any_na(data$raw$`1a`)
+
+featureSet <- c("PTID","Time")
+palmo_obj <- lmeVariance(data_object=palmo_obj, featureSet=featureSet,
+                         meanThreshold=0, fileName="CBC")
+var_decomp <- palmo_obj@result$variance_decomposition
+head(var_decomp[,c(featureSet, "Residual")])
+
+pdf_subset(file.path(palmo_obj@filePATH, "outputFile-Outlier-Boxplot.pdf"), 
+                     pages = 3, 
+                     file.path(palmo_obj@filePATH, "outliers 1a feature by measurement.pdf"))
+
+```
+
+```{r outlier_1a_fig, out.width="\\linewidth", include=TRUE, fig.pos="H", fig.align="center", echo=FALSE}
+#| fig.cap = "Outliers by Z-method. There are some measurements that are 
+#| indicative of being outliers."
+
+knitr::include_graphics(file.path(palmo_obj@filePATH, "outliers 1a feature by measurement.pdf"))
+```
+### Partitioning of Variance
+
+```{r CBC_Variance_Explained_1a_fig, out.width="0.8\\linewidth", include=TRUE, fig.align="center", echo=FALSE, fig.pos="H"}
+#| fig.cap = "Variance explained by individual, time and residual variance"
+
+knitr::include_graphics(file.path(palmo_obj@filePATH, "CBC-VarianceExplained-Boxplot.pdf"))
+
+```
+
+We can see from variance decomposition analysis that MCV, HGB, MPV, RDW, and LYM. Except for LYM, these parameters are expected to be variable in a population, but lymphocytes are generally stable across individuals and requires more perturbation of the health state to vary. In this case, two patients had lower lymphocyte counts than the others, adding excessive variation sompared to what one would expect. Additionally, patient #3 with likely iron deficiency anemia add variance to the red blood cell related parameters. 
+Among time related parameters, even though small, WBC is typical to display more time related variance than interindividual. WBC in healthy individuals can easily change 50% from day to day and be normal, but the vairation among healthy individuals is much smaller. This is mainly explained by granulocytes, whereas monocytes and lymphocytes are generally much more stable over time. 
+
+The result is weakened but similar when removing patient #3 (not shown). 
+
+```{r donor_specific_variance_contribution, fig.pos="H"}
+#| fig.cap = "Variance contribution for each feature by patient, time and residuals"
+plots <- variancefeaturePlot(vardata=var_decomp, 
+                            featureSet=featureSet, Residual=T)
+  
+```
+
+## Flow Cytometry Data
+
+For a subset of patients, a more thorough analysis of white blood cells was performed with multiparameter flow cytometry. 
+
+### Data Overview
+
+The data file is stated to be in percentages. Commonly, cell populations are either of defined parent populations or to all leukocytes. Being a percentage of all cells makes calculations easier (otherwise the sum of percentages is not 100%). It is assumed that the percentage is in relation to all living cells.
+
+There is no missing data in the dataset.
+
+```{r flow_cytometry_data_overview}
+
+flow.data.points <- c("PTID5W2", "PTID5W3", "PTID5W4", "PTID5W5", "PTID5W6", "PTID5W7",
+                      "PTID6W2", "PTID6W3", "PTID6W4", "PTID6W5", "PTID6W6", "PTID6W7",
+                      "PTID2W2", "PTID2W3", "PTID2W4", "PTID2W5", "PTID2W6", "PTID2W7",
+                      "PTID4W2", "PTID4W3", "PTID4W4", "PTID4W5", "PTID4W6", "PTID4W7")
+
+flow.cell.types <- c("DP abT cells",
+                "Treg",
+                "CD4 T naive",
+                "CD4 Temra",
+                "CD4 Tcm",
+                "CD4 Tem",
+                "CD8 T naive",
+                "CD8 Temra",
+                "CD8 Tcm",
+                "CD8 Tem",
+                "DN abT cells",
+                "gdT cells",
+                "IgD+CD27+ B cells",
+                "IgD- CD27+ B cells",
+                "IgD+CD27- B cells",
+                "IgD-CD27- B cells",
+                "plasmablasts",
+                "CD16+56lo NK cells",
+                "CD16-56hi NK cells",
+                "basophils",
+                "Intermediate monocytes",
+                "Classical monocytes",
+                "Non-classical monocytes",
+                "Plasmacytoid DC",
+                "cDC1",
+                "DN DC",
+                "cDC2")
+
+
+
+perc.all.weeks <- data$raw$`1b` %>%
+  summarise(across(all_of(flow.data.points), sum))
+
+pander(perc.all.weeks, caption = "Leakage of cells outside any target gate can be seen to be small and almost all identified leukocytes have been accounted for. ")
+```
+
+
+
+```{r flow_cytometry_setup}
+#| fig.cap = "Longitudinal alalysis on each cell type from flow cytometry."
+
+
+data$raw$long$`1b` <- data$raw$`1b` %>% 
+  pivot_longer_on_ptid()
+
+
+plot.fcm.patient.by.parameter <- ggplot(
+  data = data$raw$long$`1b`, 
+  aes(x = as.numeric(as.character(Week)), 
+      y = Value, group = ID)) +
+  # Raw data as semi-transparent lines
+  geom_line(aes(color = ID), size = 0.5, alpha = 0.7) +
+
+  scale_color_manual(values = patient.palette[c(2,4,5,6)]) +
+  facet_wrap(~ `Cell type in flow cytometry`, scales = "free_y", ncol = 4) +
+  labs(
+    title = "Cell Type in Flow Cytometry",
+    x = "Week",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), strip.text = element_text(size=8), 
+        axis.text.y = element_blank())
+
+plot.fcm.patient.by.parameter
+
+```
+
+
+```{r flow_by_week}
+#| fig.cap = "Coefficient of variation for each cell type and ID over all measured weeks.
+#| It can be seen that 2 and 4 contributes most variation, but in different cell types."
+
+data$raw$long$`1b` %>% 
+  group_by(`Cell type in flow cytometry`, ID) %>% 
+  summarise(cv = sd(Value)/mean(Value)) %>% 
+  ggplot() + 
+  geom_line(aes(x=`Cell type in flow cytometry`, y = cv, color = ID, group = ID)) +
+  theme_pubclean() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+  
+
+```
+
+## PCA Analysis
+
+```{r flow_pca_components}
+#| fig.cap = "Screeplot of PCA on Flow Cytometry Data. 
+#| 85% of variance can be explained by the two first components."
+
+wide_1b <- data$raw$long$`1b` %>% 
+  select(-`Cell type in scRNA`) %>% 
+  pivot_wider(names_from = c(`Cell type in flow cytometry`, Week), 
+              values_from = Value, 
+              names_sep = "_W")
+
+pca_1b <- PCA(wide_1b, quali.sup = 1, scale.unit = F)
+
+fviz_screeplot(pca_1b, choice = "variance")
+
+```
+
+```{r flow_pca_var_contrib}
+#| fig.cap = "Variable contribution to principal component 1. 
+#| Innate immune cells, mainly monocytes, and unprimed adaptive immune cells, 
+#| particularly naive CD4 T-cells and NK-cells, can be seen to contribute most to variation"
+fviz_pca_contrib(pca_1b, choice = "var",top = 20)
+
+```
+
+
+
+```{r flow_pca_ind_contrib}
+#| fig.cap = "Individual contribution to component 1 and 2. It can be seen that individual 4
+#|  is the principal cause of overall variation, and that individual 2 have a principally
+#|  orthogonal variation to individual 4."
+
+grid.arrange(
+  fviz_pca_contrib(pca_1b, axes = 1, choice = "ind"),
+  fviz_pca_contrib(pca_1b, axes = 2, choice = "ind"),
+  ncol = 2
+)
+
+
+```
+
+```{r pca_ind_plot}
+#| fig.cap = "Plot of Individuals in component 1 and 2. 
+#| Individual 4 and 2 are different from the group in different ways. 
+#| Individual 1 and 3 are similar."
+
+fviz_pca_ind(pca_1b)
+
+```
+
+
+PCA analysis is concurrent with plotting of the coefficient of variation. Individual 2 and 4 contributes most to variation, but in different cell types. 
+
+
+# OLink
+
+```{r setup_1c}
+
+data$raw$long$`1c` <- data$raw$`1c` %>%
+  pivot_longer(cols = -PROTID, names_to = "ID", values_to = "Value")
+
+data$raw$long$`1c` <- data$raw$long$`1c` %>%
+  separate(ID, into = c("PTID", "W"), sep = "W", convert = TRUE)
+
+```
+
+
+The Olink data is assumed to be already normalized. There is no possibility to normalise the data as indicators of plates and experimental runs are absent in the raw data. 
+
+\newpage
+
+## Data Overview
+
+```{r 1c_heatmap}
+#| fig.cap = "Heatmap of values from Olink. 1156 proteins was measured across 6 individuals at 
+#| different time points. No obvious outliers can be seen among the individual time points 
+#| (no column formations), rather protein abundance is related to the specific protein"
+
+proteins_1c <- data$raw$`1c`[["PROTID"]]
+data_heatmap_1c <- select(data$raw$`1c`, -PROTID)
+row.names(data_heatmap_1c) <- proteins_1c
+
+pheatmap(data_heatmap_1c, scale = "none", cluster_rows = F, cluster_cols = F, 
+         show_rownames = F)
+
+```
+
+\newpage
+
+## Outliers
+
+```{r outliers_1c}
+#| fig.cap = "Olink measurements of protein abundance as percentage of 
+#| overall max value (black dots). Red dots indicate outliers (3 z scores). 
+#| It can be seen that outliers increase as the mean expression decreases. 
+#| A rug plot visually aids identifying the density of missing values" 
+
+sorted_1c <- data$raw$long$`1c`  %>%
+  group_by(PROTID) %>%
+  mutate(mean_value = mean(Value, na.rm = TRUE),
+         z_score = scale(Value),
+         outlier = abs(z_score)>3, 
+         Num_NA = sum(is.na(Value)),
+         Pct_NA = 100 * Num_NA/n()) %>%
+  ungroup() %>%
+  arrange(desc(mean_value)) %>% 
+  mutate(PROTID = factor(PROTID, levels = unique(PROTID))) %>% 
+  mutate(Pct_Value = 100*(Value/max(Value, na.rm = T)))
+         
+
+mean_protein_ordered_plot <- ggplot() +
+  geom_point(aes(PROTID, Pct_Value, color = "Normal"), 
+             data = sorted_1c, alpha = 1/3, size=.4) +
+  geom_point(aes(PROTID, Pct_Value, color = "Outlier"), 
+             data = subset(sorted_1c, outlier == T), 
+             size = 0.6, alpha = 1/2) +
+  scale_color_manual(values = c("Normal" = "black", "Outlier"="red")) +
+  geom_rug(aes(PROTID), data = subset(sorted_1c, outlier == T),
+           sides = "b", stat = "count", color = "red") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(), 
+        axis.line.y = element_line(linewidth = 0.1),
+        axis.line.x = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = "top") +
+  xlab("Protein") +
+  ylab("Percentage of Max Expression Value") +
+    coord_cartesian(clip = "off") +
+  theme(plot.margin = margin(1, 1, 1, 1, "cm"))
+
+mean_protein_ordered_plot
+
+
+```
+
+```{r outliers_by_ptid}
+#| fig.cap = "It can be seen that especially PTID 3 and 5 contribute outliers"
+mean_protein_ordered_plot + facet_wrap(~PTID)
+
+```
+
+
+```{r PTID_Week_outliers, fig.width=8, fig.height=11}
+#| fig.cap = "Looking at all the data, we can see that is mainly PTID3 at day 6 
+#| that contributes outliers"
+
+
+mean_protein_ordered_plot + 
+  facet_grid(W~PTID) + 
+  theme(strip.placement = "outside", strip.text = element_text(size=4)) 
+
+```
+
+It can be seen that outliers are mainly concentrated to patient 3 at day 6. The cause for this might be technical, but the overall picture of the data is similar to others and might simply reflect inflammation from a common cold or other ailment bound to happen to someone during a longitudinal study like this. The outliers will not be removed, but it is good to know that outliers have a clear relationship to this day and patient.  
+\newpage
+
+## Missing Values
+
+```{r olink_missing_values}
+#| fig.cap = "Missing values in Olink data. Missingness seem to be related to certain proteins, 
+#| but no obvious relation to individual or time point can be seen"
+vis_miss(data$raw$`1c`) + 
+  theme(axis.text.x.top = element_text(angle = 90, size = 7),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+```
+
+
+
+```{r summary_na_1c}
+#| fig.cap = "NA values can be seen to increase with decreasing protein abundance.
+#| The percentage of NA values among 60 measurements of a protein is shown in red. 
+#| The rug plot indicates that more than 10% of measurements for a protein is NA"
+
+na_by_value_plot <- ggplot(sorted_1c) +
+  geom_point(aes(PROTID, Pct_Value, color = "Normal"), alpha = 1/3, size=.4) +
+  geom_point(aes(PROTID, Pct_NA, color = "Pct of NA"), 
+             data = subset(sorted_1c, Pct_NA > 1), size = 0.6, alpha = 1/2) +
+  scale_color_manual(values = c("Normal" = "black", "Pct of NA"="red")) +
+  geom_rug(aes(PROTID), data = subset(sorted_1c, Pct_NA > .1),
+           sides = "b", stat = "count", color = "red") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(), 
+        axis.line.y = element_line(linewidth = 0.1),
+        axis.line.x = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = "top") +
+  xlab("Protein") +
+  ylab("Percentage of Max") +
+    coord_cartesian(clip = "off") +
+  theme(plot.margin = margin(1, 1, 1, 1, "cm"))
+  
+na_by_value_plot
+
+```
+
+```{r na_by_value_facet, fig.width=8, fig.height=11}
+#| fig.cap="Facet plot of pct of missing values by expression level of proteins.
+#| The pattern of increasing missingness is similar across all measurements."
+na_by_value_plot + 
+  facet_grid(W~PTID) + 
+  theme(strip.placement = "outside", strip.text = element_text(size=4)) 
+
+```
+
+Missingness is similar among all patients and time points in distribution, with an increase towards lower protein abundance. \newpage
+
+## Outlier Removal and Imputation
+
+Proteins with high percentages of NA values will be removed. NA-values, or lack of protein detection, can clearly be seen to increase as the abundance of a protein decreases. 
+
+```{r outlier_removal_1c}
+
+na_threshold = 70
+summary_1c_na_removed <- sorted_1c %>% 
+  filter(Pct_NA < na_threshold)
+
+protid_gt70na <- setdiff(sorted_1c$PROTID, summary_1c_na_removed$PROTID)
+
+kable(matrix(protid_gt70na, ncol=5), 
+      caption = "Proteins with more than 70 pct missing values")
+```
+
+We remove proteins with more than 70% missing values as no meaninfgul imputation can be done. The cut off is heuristic, but gioded by the plot on missing values and expression data. A plot of how many proteins are removed at different NA thresholds (1-100%) indicates that roughly 70% is where the linear domain is lost. 
+
+```{r num_proteins_per_na_pct}
+
+removed_per_na_threshold <- map_int(100:1, \(na_threshold) {
+  summary_1c_na_removed <- sorted_1c %>% 
+  filter(Pct_NA < na_threshold)
+  
+  protid_removed <- setdiff(sorted_1c$PROTID, summary_1c_na_removed$PROTID)
+  
+  length(protid_removed)
+})
+
+plot(removed_per_na_threshold, 
+     xlab = "Pct NA", 
+     ylab = "Number of Proteins Removed",
+     main = "Number of Proteins Removed by NA Threshold",
+     type = 'b', 
+     pch = 19) 
+
+```
+
+```{r imputation_1c, include = F}
+
+
+generate_random_predictors <- function(n, k) {
+  
+  # Initialize an n x n matrix with zeros
+  mat <- matrix(0, nrow = n, ncol = n)
+  
+  # Iterate over each row and place k ones at random positions 
+  for (i in 1:n) {
+    selected_positions <- sample(1:n, k)  # Randomly select k positions from available positions
+    mat[i, selected_positions] <- 1  # Set ones at selected positions
+  }
+  # Zero out the diagonal
+  diag(mat) <- 0
+  
+  # Check if the diagonal is zero
+  if(any(diag(mat) != 0)) stop("Diagonal of the matrix is not zero")
+  
+  return(mat)
+}
+
+
+feature_matrix_1c <- data$raw$`1c` %>%
+  filter(! PROTID %in% protid_gt70na) %>% 
+  select(-PROTID) %>%
+  t() %>% #protein as column
+  cbind(rep(1:6, 6), . ) %>% #weeks
+  cbind(rep(1:6, each=10), .) 
+
+feature_tibble_1c <- data$raw$long$`1c` %>%
+  filter(! PROTID %in% protid_gt70na) %>% 
+  mutate(
+    PTID = as.integer(sub("PTID", "", PTID))
+    ) %>% 
+  pivot_wider(names_from = PROTID, values_from = Value) %>% 
+  rename(HLAE=`HLA-E`)
+  #select(c(-PTID, -W))
+  
+
+#dummy.imp.predictorMatrix <- make.predictorMatrix(feature_tibble_1c)
+dummy.imp.predictorMatrix <- generate_random_predictors(ncol(feature_tibble_1c), k=100)
+
+colnames(dummy.imp.predictorMatrix) <- colnames(feature_tibble_1c)
+rownames(dummy.imp.predictorMatrix) <- colnames(feature_tibble_1c)
+dummy.imp.predictorMatrix[,"W"] <- 2
+dummy.imp.predictorMatrix["W",] <- 0
+dummy.imp.predictorMatrix[,"PTID"] <- -2
+dummy.imp.predictorMatrix["PTID", ] <- 0
+
+
+
+imp.pmm.1c <- mice(feature_tibble_1c,
+                     method = "pmm",
+                     predictorMatrix = dummy.imp.predictorMatrix,
+                     maxit = 1,
+                     m = 1,
+                     printFlag = T)
+  
+# Generate tibble from the completed data
+data$imp$`1c` <- tibble(complete(imp.pmm.1c))
+  
+
+#for is_imputed column
+where.imputed <- tibble(as.data.frame(imp.pmm.1c$where))
+where.imputed$PTID <- data$imp$`1c`$PTID
+where.imputed$W <- data$imp$`1c`$W
+
+num.imputed <- apply(select(where.imputed, -c(PTID, W)), 2, sum) 
+
+num.imputed.long <- tibble(PROTID = names(num.imputed), num_imputed = num.imputed)
+
+#long data
+data$imp$long$`1c` <- data$imp$`1c` %>% 
+  pivot_longer(cols = ! c(PTID, W), names_to = "PROTID", values_to = "Value") %>%
+  mutate(PROTID = factor(PROTID, levels = unique(PROTID)))
+
+#long is_imputed
+where.imputed.long <- where.imputed %>% 
+  pivot_longer(cols = ! c(PTID, W), names_to = "PROTID", values_to = "is_imputed") %>%
+  mutate(PROTID = factor(PROTID, levels = unique(PROTID)))
+
+#combine to have boolean column of is_imputed
+imp_long_1c <- data$imp$long$`1c` %>% 
+  inner_join(where.imputed.long, by = c("PTID", "W", "PROTID"))
+
+order_protid <- imp_long_1c %>% 
+  group_by(PROTID) %>% 
+  summarise(mean_Value = mean(Value, na.rm = T)) %>% 
+  arrange(desc(mean_Value)) %>% 
+  pull(PROTID)
+
+imp_long_1c_sorted <- imp_long_1c %>% 
+  arrange(match(PROTID, order_protid)) %>% 
+  mutate(PROTID = factor(PROTID, levels = order_protid))
+
+imp_long_1c_sorted_pct <- imp_long_1c_sorted %>%
+  mutate(Pct_Value = Value/max(Value, na.rm = T)) %>% 
+  mutate(Pct_lo = mean(Pct_Value, na.rm = T) < 0.3, .by = c(PROTID))
+
+
+
+```
+
+```{r imp.plot}
+
+ggplot() +
+  geom_point(
+    aes(PROTID, 
+        Pct_Value, 
+        color = "Original"), 
+    data = subset(imp_long_1c_sorted_pct, is_imputed == FALSE),
+    alpha = 1/3, 
+    size=.3) +
+  geom_point(
+    aes(PROTID, 
+        Pct_Value, 
+        color = "Imputed"), 
+    data = subset(imp_long_1c_sorted_pct, is_imputed == TRUE),
+    alpha = 1/3, 
+    size=.3) +
+  scale_color_manual(name = "Is Imputed", 
+                     values = c("Original"="black", "Imputed"="red")
+                     ) +
+    theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(), 
+        axis.line.y = element_line(linewidth = 0.1),
+        axis.line.x = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = "top", 
+        legend.key = element_blank()) +
+  guides(color = guide_legend(reverse=T, 
+                              override.aes = list(size = 4),
+                              alpha = 1)) +
+  xlab("Protein") +
+  ylab("Percentage of Max") +
+  coord_cartesian(clip = "off") +
+  labs(title = "Predicitive Mean Matching Imputation",
+       caption = "Values in red are imputed and overlap well with original data") +
+  facet_wrap(~Pct_lo, ncol = 1, 
+             scales = "free", 
+             labeller = labeller(Pct_lo = c("TRUE"="Value Pct < 30% of Max", "FALSE"="Value Pct > 30% of Max")))
+
+
+```
+Data was imputed with predictive mean matching PTID and Week were used as class and random variables with the package mice. Imputation mostly affects proteins with low expression values. The imputed values align well with the observed data. 
+
+The imputed values will be carried forward in analysis. 
+
+\newpage
+
+## PALMO
+
+```{r PALMO_1c, include = F}
+
+#ann data Sample, PTID, Time
+data$imp$`1c` <- data$imp$`1c` %>% 
+  unite(PTIDW, PTID, W, remove = F, sep = "w") %>% 
+  mutate(PTIDW = paste0("PTID", PTIDW))
+
+ann_palmo_1c <- data.frame(Sample = pull(data$imp$`1c`, PTIDW),
+                     PTID = pull(data$imp$`1c`, PTID),
+                     Time = pull(data$imp$`1c`, W)
+                     )
+
+# ann_palmo_1c <- data$imp$`1c` %>% 
+#   select(PTIDW, PTID, W) %>% 
+#   rename(Sample = PTIDW, Time = W)
+
+sample_names_1c <- data$imp$`1c` %>% 
+  pull(PTIDW)
+
+expr_1c <- data$imp$`1c` %>% 
+  select(-c(PTIDW, PTID, W)) %>% 
+  t() 
+
+colnames(expr_1c) <- pull(data$imp$`1c`, PTIDW)
+
+palmo_1c <- createPALMOobject(anndata = ann_palmo_1c, data = expr_1c)
+
+palmo_1c <- annotateMetadata(palmo_1c)
+
+#Sample overlap and final matrix
+
+palmo_1c <- mergePALMOdata(data_object=palmo_1c, datatype="bulk")
+
+palmo_obj <- 
+  checkReplicates(data_object=palmo_1c, mergeReplicates = T)
+
+```
+
+
+```{r palmo_donor_variation_1c, echo = F}
+
+featureSet <- c("PTID","Time")
+palmo_1c <- lmeVariance(data_object=palmo_1c, featureSet=featureSet,
+                         filePATH = "Vasaikar_files", fileName="olink")
+
+
+knitr::include_graphics(file.path("Vasaikar_files", "olink-VarianceExplained-Boxplot.pdf"))
+
+```
+
+
+```{r palmo_donor_variation_table_top_1c}
+
+palmo_1c@result$variance_decomposition %>% 
+  slice_head(n = 10) %>% 
+  rename(Protein = Gene,
+         Mean = mean,
+         Median = median,
+         Max = max) %>% 
+  mutate(across(where(is.numeric), round, 1)) %>% 
+  left_join(num.imputed.long, by = join_by(Protein == PROTID)) %>% 
+  rename(`n imputed` = num_imputed) %>% 
+kable(align = 'c', caption = "Proteins with highest inter-donor variation")
+
+
+```
+
+```{r palmo_time_variation_table_1c}
+
+palmo_1c@result$variance_decomposition %>% 
+  arrange(desc(Time)) %>% 
+  slice_head(n = 10) %>% 
+  rename(Protein = Gene,
+         Mean = mean,
+         Median = median,
+         Max = max) %>% 
+  mutate(across(where(is.numeric), round, 1)) %>% 
+  left_join(num.imputed.long, by = join_by(Protein == PROTID)) %>% 
+  rename(`n imputed` = num_imputed) %>% 
+kable(align = 'c', caption = "Proteins with highest time variation. 
+      Caution as 37/60 values for FKBP7 was imputed")
+
+
+```
+
+```{r varfeatureplot_1c}
+#| fig.cap = "Variance Feature Plots"
+plots <- variancefeaturePlot(vardata=var_decomp,
+featureSet=featureSet,
+Residual=T)
+
+```
+
+```{r protein_feature_plots_1c, echo = F}
+#| fig.cap = "Protein Feature Plots. FOLR3 and PSPN can readily be seen to have high inter-donor
+#| variation and low intra-donor variation. FBP7 had many imputed values. EIF4G1 was top in variation
+#| over time. ABHD14 and CALR had high residual variance"
+
+plots <- gene_featureplot(data_object=palmo_1c,
+                featureList=c("FOLR3", "PSPN", "FKBP7", "EIF4G1", "CALR", "ABHD14B"),
+                x_group_by="PTID", var_oi="Time")
+
+
+```
+
+```{r cv_palmo_1c, echo =F}
+
+cv <- cvCalcBulkProfile(data_object=palmo_1c, fileName = "cv_1c")
+
+```
+
+```{r cv_heatmap_stable_1c, include = F}
+#| fig.cap = "Stable Proteins" 
+palmo_obj <- cvCalcBulk(data_object=palmo_1c, meanThreshold=3, cvThreshold=5)
+
+```
+
+```{r cv_heatmap_stable_1c1, echo = F}
+#| fig.cap = "Stable Proteins" 
+
+knitr::include_graphics(file.path("output", "outputFile-CV-Stable-Heatplot.pdf"))
+
+```
+
+
+```{r cv_heatmap_variable_1c, fig.align='center', echo = F}
+#| fig.cap = "Variable Proteins" 
+
+
+knitr::include_graphics(file.path("output", "outputFile-CV-Variable-Heatplot.pdf"))
+
+```
+
+```{r sample_cv_1c, echo = F}
+#| fig.cap = "Sample CV plots"
+
+
+
+# Define the PDF file path
+pdf_path <- file.path("output", "outputFile-CV-Sample-Plot.pdf")
+
+# Split the PDF into individual pages
+pdf_split(pdf_path, output = file.path("output", "sample_cv_split"))
+
+
+
+# List of individual PDF page paths
+pdf_pages_paths <- sprintf(file.path("output", "sample_cv_split_00000%d.pdf"), 1:6)
+
+# if (nzchar(Sys.which("pdfcrop"))) {
+#   # Crop PDFs only if pdfcrop is available in the system path
+#   walk(pdf_pages_paths, ~ system(sprintf("pdfcrop %s %s", .x, .x)))
+# } else {
+#   warning("pdfcrop is not found in the system path. PDFs were not cropped.")
+# }
+
+
+# Create a list of plots with include_graphics
+plots_list <- lapply(pdf_pages_paths, function(page_path) {
+  ggdraw() + 
+    draw_image(page_path)
+})
+
+# Arrange the plots in a grid
+plot_grid(plotlist = plots_list)
+
+```
+
+```{r autocorrelation_1c, echo = F}
+#| fig.cap ="Sample autocorrelation. 
+#| It can be readily seen that there is a high autocorrelation among samples." 
+palmo_obj <- sample_correlation(data_object=palmo_1c, group_by="PTID", 
+                                fileName = "autocorrelation_1c",
+                                filePATH = "Vasaikar_files")
+
+knitr::include_graphics(file.path("Vasaikar_files", "autocorrelation_1c-SampleCorrelationplot.pdf"))
+
+```
+
+ \newpage
+
+## t-SNE
+
+```{r t-SNE}
+#| fig.cap = "t-SNE of proteome. Data clusters per subject"
+
+data$imp$`1c` %<>%
+  mutate(PTID = factor(PTID), 
+         W = factor(W),
+         PTIDW = factor(PTIDW))
+
+data$imp$feature$`1c` <- data$imp$`1c` %>%
+  select(-c(PTID, W)) %>% 
+  select(-c(FKBP7, IKZF2, TNNI3)) %>% 
+  pivot_longer(cols = -PTIDW, names_to = "Feature", values_to = "Value") %>% 
+  pivot_wider(names_from = "PTIDW", values_from="Value")
+
+res.tsne <- data$imp$feature$`1c` %>% 
+  filter(! Feature == "PTID") %>% 
+  filter(! Feature == "W") %>% 
+  select(-Feature) %>% 
+  tsne(labels = data$imp$`1c`$PTID, perplex = 18, seed = 7)
+
+res.tsne
+```
+
+\newpage
+
+## PCA
+
+PCA was performed on Olink data to check for meaningful decomposition. However, decomposition failed to find much variance coverage in the first axes. Only 30% were covered in the two first axes. 
+
+```{r PCA}
+#| fig.cap = "PCA of proteome. PCA failed to cover much of variance with 
+#| only slightly more than 30% in the two first dimensions."
+
+
+res.pca <- data$imp$`1c` %>% 
+  select(-PTIDW) %>% 
+  PCA(quali.sup = 1:2)
+
+fviz_screeplot(res.pca, habillage = data$imp$`1c`$PTID, choice = "variance")
+
+```
+
+\newpage
+
+## MOFA
+
+MOFA is a package to do factor analysis generalised to multi-omic data. An addition has been added to allow covariates, such as time. The data set from CBC, immunophenotype and proteome will be analysed together and weeks added as a covariate. Data was scaled as they have inherently different ranges. 
+
+```{r MOFA, include = F}
+
+mofa.long.1c <- data$imp$`1c` %>% 
+  pivot_longer(cols = -c(PTIDW, PTID, W), names_to = "feature", values_to = "value") %>% 
+  mutate(view = "Olink") %>% 
+  mutate(PTIDW = str_replace(PTIDW, "^PTID", "")) %>% 
+  rename(sample = PTIDW)
+
+mofa.long.1b <- data$raw$long$`1b` %>% 
+  mutate(PTIDW = paste(ID, Week, sep = "w")) %>% 
+  select(-`Cell type in scRNA`) %>% 
+  rename(feature = `Cell type in flow cytometry`,
+         sample = PTIDW, 
+         PTID = ID,
+         value = Value,
+         W = Week) %>% 
+  mutate(view = "immunophenotype")
+
+mofa.long.1a <- data$raw$long$`1a` %>% 
+  mutate(sample = paste(ID, Week, sep = "w")) %>% 
+  select(-c(Type, Descriptor_uni)) %>% 
+  rename(feature = Descriptor,
+         value = Value,
+         PTID = ID,
+         W = Week) %>% 
+  mutate(view = "CBC")
+
+mofa.samples = tibble(sample = factor(unique(mofa.long.1a$sample)),
+                      donor = factor(rep(1:6, each = 10)),
+                      week = rep(1:10, 6))
+
+clinical.data <- data$desc$patient.metadata %>% 
+  mutate(donor = factor(as.integer(str_replace(donor, "^PTID", ""))))
+
+mofa.metadata <- left_join(mofa.samples, clinical.data, 
+                           by = "donor", relationship = "many-to-one") %>% 
+  mutate(sex = factor(sex)) %>% 
+  rename(PTID = donor)
+
+# 
+# mofa.metadata.1a <- mofa.long.1a %>% 
+#   select(sample, -PTID) %>% 
+#   left_join(mofa.metadata, by = "sample", relationship = "many-to-one", multiple = "first")
+# 
+# mofa.metadata.1b <- mofa.long.1b %>% 
+#   select(sample, feature, view) %>% 
+#   left_join(mofa.metadata, by = "sample", relationship = "many-to-one")
+# 
+# mofa.metadata.1c <- mofa.long.1c %>% 
+#   select(sample, feature, view) %>% 
+#   left_join(mofa.metadata, by = "sample", relationship = "many-to-one")
+
+
+# mofa.metadata.all <- bind_rows(mofa.metadata.1a, mofa.metadata.1b, mofa.metadata.1c)
+
+mofa.long.all <- bind_rows(mofa.long.1a, mofa.long.1b, mofa.long.1c)
+
+mofa.data <- create_mofa(mofa.long.all, extract_metadata = T)
+
+samples_metadata(mofa.data) <- mofa.metadata
+
+mofa.weeks <- tibble(sample = paste0(rep(1:6, each = 10), "w", rep(1:10, 6)),
+                     covariate = rep("week", 60),
+                     value = rep(1:10, 6))
+
+mofa.data <- set_covariates(mofa.data, covariates = mofa.weeks)
+
+
+
+data.opts <- get_default_data_options(mofa.data)
+data.opts$scale_views = T
+
+model.opts <- get_default_model_options(mofa.data)
+model.opts$spikeslab_weights = T
+
+training.opts <- get_default_training_options(mofa.data)
+training.opts$verbose = T
+
+mefisto.opts <- get_default_mefisto_options(mofa.data)
+
+mofa.data.prepared <- prepare_mofa(mofa.data, model_options = model.opts,
+                   mefisto_options = mefisto.opts,
+                   training_options = training.opts,
+                   data_options = data.opts)
+
+library(reticulate)
+python_path <- system("which python3", intern = TRUE)
+use_python(python = python_path)
+
+mofa.data.result <- run_mofa(mofa.data.prepared, outfile = "mofa_results", save_data = T)
+
+```
+
+
+```{r mofa.plot.var.explained}
+#| fig.cap = "Variance explained in MOFA Analysis. CBC and and immunophenotype can 
+#| be seen to have features that concentrate, indicating a simple structure for 
+#| variance, whereas olink data is distributed over many factors"
+
+plot.variance.mofa <- plot_variance_explained(mofa.data.result) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot.variance.mofa
+
+```
+
+```{r mofa.factor.cor, include = F}
+#| fig.cap = "Correlation matrix between factors from MOFA"
+#plot.factor.cor <- plot_factor_(mofa.data.result)
+
+```
+
+
+```{r mofa.covariate}
+
+kable(get_scales(mofa.data.result), caption = "Weight of the covariate time to each factor. It can be seen that time and the other features (mainly factor 1-8) are orthogonal")
+
+```
+
+```{r mofa.cov.factor.plot, echo = F}
+#| fig.cap = "The effect of the covariate time on factor weights. 
+#| The effect of time is somewhat evenly distributed. 
+#| In factor 4, PTID 5 can be seen to be a bit of an outlier. The result is expected, as
+#| there was no intervention and no expectation to see a difference at different weeks"
+
+mofa.factors.cov <- plot_factors_vs_cov(mofa.data.result, color_by = "PTID")
+
+mofa.factors.cov
+```
+
+
+```{r mofa.weights.view.1}
+#| fig.cap = "Weights for factor 3 in CBC samples (that captured most variance). 
+#| PLT and MCV are most prominent. PLT is expected and has a normal high variance.
+#| MCV likely reflect PTID 3 that had anemia."
+mofa.weights.plot.1 <- plot_weights(mofa.data.result, factors = 3, view = 1)
+
+mofa.weights.plot.1
+```
+
+
+```{r mofa.weights.view.2}
+#| fig.cap = "Top weights in immunohenotyping factor 1 and 2. The result is indicative
+#| of the inter-individual difference in these subsets, but they are generally stable
+#| within an individual as indicated from the lack of covariate (time) effect"
+mofa.weights.plot.2 <- plot_weights(mofa.data.result, factors = 1:2, view = 2, text_size = 4, nfeatures = 5)
+
+mofa.weights.plot.2
+```
+
+```{r mofa.weights.view.3.1}
+#| fig.cap = "Top features to factor 1 and 2"
+mofa.weights.plot.3 <- plot_weights(mofa.data.result, factors = 1:2, view = 3, text_size = 4, nfeatures = 5, )
+
+mofa.weights.plot.3
+
+```
+
+```{r mofa.weights.view.3.2}
+#| fig.cap = "Top features to factor 3 and 4"
+mofa.weights.plot.4 <-plot_weights(mofa.data.result, 
+                       factors = 3:4, view = 3, text_size = 4, nfeatures = 5, )
+
+mofa.weights.plot.4
+
+```
+
+```{r mofa.weights.view.3.3}
+#| fig.cap = "Top features to factor 5 and 6"
+mofa.weights.plot.3.3 <- plot_weights(mofa.data.result, factors = 5:6, view = 3, text_size = 4, nfeatures = 5, )
+
+mofa.weights.plot.3.3
+
+```
+
+```{r mofa.weights.view.3.4}
+#| fig.cap = "Top features to factor 9 and 11 where time had most effect"
+mofa.weights.plot.3.4 <- plot_weights(mofa.data.result, factors = c(9, 11), view = 3, text_size = 4, nfeatures = 5, )
+
+mofa.weights.plot.3.4
+
+```
+
+```{r mofa.top.weights}
+#| fig.cap = "Example of lollipop chart of top weights in factor 3 in CBC. 
+#| Individual weights are easier to compare than previous plot. Signs to the right 
+#| indicate direction of weight"
+mofa.top.weights <- plot_top_weights(mofa.data.result, factors = 3, view = 1)
+
+mofa.top.weights 
+```
+
+
+```{r mofa.data.vs.cov.1}
+#| fig.cap = "Plotting data vs covariates colored for PTID we can easily see that
+#| HGB, MCV and RDW are due to the anemic PTID 3. PLT is due to somewhat lower
+#| platelets in PTID 6 (still normal)"
+
+mofa.data.vs.cov <- plot_data_vs_cov(mofa.data.result, factor=3,
+                         features = 4,
+                         color_by = "PTID",
+                         dot_size = 1, view = 1)
+
+mofa.data.vs.cov
+
+```
+
+
+```{r mofa.data.vs.cov.2}
+#| fig.cap = "Top proteins in factor 3 (where CBC had most variance). PTID3 can be seen
+#| to segregate in this factor as well, but other subjects do as well. 
+#| GH2, GSAP, FGF23 might be related to that subject's anemic state"
+
+mofa.data.vs.cov.2 <- plot_data_vs_cov(mofa.data.result, factor=3,
+                         features = 8,
+                         color_by = "PTID",
+                         dot_size = 1, view = 3)
+
+mofa.data.vs.cov.2
+
+```
+
+
+```{r mofa.enrichment, include=F}
+
+#features_names(mofa.data.result)[["Olink"]] 
+library(MOFAdata)
+
+data(MSigDB_v6.0_C2_human)
+
+syms <- clusterProfiler::bitr(colnames(MSigDB_v6.0_C2_human), 
+                      fromType = "ENSEMBL", 
+                      toType = "SYMBOL", 
+                      OrgDb = org.Hs.eg.db::org.Hs.eg.db
+                      )
+
+# Create a named vector from syms data.frame
+name_replacements <- setNames(syms$SYMBOL, syms$ENSEMBL)
+
+# Replace column names and subset columns with valid SYMBOL names
+MSigDB_v6.0_C2_human <- MSigDB_v6.0_C2_human[, colnames(MSigDB_v6.0_C2_human) %in% names(name_replacements)]
+colnames(MSigDB_v6.0_C2_human) <- name_replacements[colnames(MSigDB_v6.0_C2_human)]
+
+
+
+enrichment.parametric <- run_enrichment(mofa.data.result,
+  view = "Olink", factors = 1:11,
+  feature.sets = MSigDB_v6.0_C2_human,
+  sign = "negative",
+  statistical.test = "parametric"
+)
+
+
+```
+
+```{r mofa.enrich.heatmap}
+#| fig.cap = "Heatmap och enrichment analysis of proteins against MSigDB. 
+#| Factor 7 and 10 seem to capture most proteins" 
+
+mofa.enrichment.heatmap <- plot_enrichment_heatmap(enrichment.parametric)
+
+mofa.enrichment.heatmap 
+
+```
+
+
+
+```{r mofa.enrich.factormap.7}
+#| fig.cap = "Factor 7 protein enrichment for MSigDB pathways."
+mofa.enrichment.7 <- plot_enrichment(enrichment.parametric, 
+  factor = 7, 
+  max.pathways = 15
+) 
+
+mofa.enrichment.7
+```
+
+```{r mofa.enrich.factormap.10}
+#| fig.cap = "Factor 10 protein enrichment for MSigDB pathways.
+#| Pathways clipped to 40 characters"
+
+enrichment.factor.10.plot = plot_enrichment(enrichment.parametric, 
+  factor = 10, 
+  max.pathways = 15
+) + scale_x_discrete(labels = function(labels) {
+    substr(labels, 1, 40)
+  })
+
+enrichment.factor.10.plot
+
+```
+
+\newpage
+
+## Final Remarks
+
+The data set included multimodal data on healthy subjects. The different data sets had a large range in features. As there is no intervention, no specific hypothesis can be made with regards to the longitudinal follow up as they are deemed to be by chance or unknown effects from activities of normal life not captured in the study. The data, however, show that in all three domains, CBC, immunophenotype and plasma proteome, most variance is caused by different basal levels in different subjects, and quite stable over time. One subject was anemic, contributing a sustained difference in certain CBC parameters and might explain some of the differences seen in proteomic data. 
