@@ -1,0 +1,60 @@
+# 0. Check prerequisites: git and docker
+# --------------------------------------
+
+# Check for git
+which git > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Error: git is not installed. Please install git and try again."
+    exit 1
+fi
+
+# Check for docker
+which docker > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Error: Docker is not installed. Please install Docker and try again."
+    exit 1
+fi
+
+# 1. Clone the repository to the current directory
+# -----------------------------------------------
+git clone git@github.com:lovetatting/vasaikar_analysis.git
+
+# Error handling: Stop if the clone fails
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to clone the repository."
+    exit 1
+fi
+
+# 2. Change directory to the repo
+# -------------------------------
+cd vasaikar_analysis
+
+# Error handling: Stop if the directory change fails
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to navigate into the repository directory."
+    exit 1
+fi
+
+# 3. Optionally pull the Docker image
+# -----------------------------------
+docker pull ghcr.io/lovetatting/vasaikar_analysis:1.0
+
+# Error handling: Warn if the Docker pull fails, but don't stop the script
+if [ $? -ne 0 ]; then
+    echo "Warning: Failed to pull the Docker image. It will be downloaded automatically in the next step."
+fi
+
+# 4. Run the Docker image
+# -----------------------
+docker run -v $(pwd)/stage:/home/ruser/workdir -w /home/ruser/workdir ghcr.io/lovetatting/vasaikar_analysis:1.0
+
+# Error handling: Stop if the Docker run command fails
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to run the Docker image."
+    exit 1
+fi
+
+# 5. Check the output
+# -------------------
+echo "Analysis complete. Check the 'stage' folder for output files and the rendered PDF (Vasaikar.pdf)."
+
